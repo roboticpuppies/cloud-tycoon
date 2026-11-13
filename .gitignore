@@ -1,0 +1,21 @@
+# OS and editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Node (no dependencies today; here in case tooling is added)
+node_modules/
+npm-debug.log*
+
+# Screenshots and headless browser profiles from UI checks
+*.png
+prof/
+prof2/
+
+# Local settings and secrets
+.env
+.env.*
+.claude/settings.local.json

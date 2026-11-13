@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud Tycoon - learn cloud architecture by breaking it</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <h1>Cloud <span>Tycoon</span></h1>
+  <div id="topbar">
+    <div class="tb" title="Monthly cost of your design"><i class="ic coin"></i><b id="tbCost">0</b></div>
+    <div class="tb" title="Traffic"><i class="ic users"></i><b id="tbRate">0</b></div>
+    <div class="tb" title="Components placed"><i class="ic box"></i><b id="tbNodes">0</b></div>
+    <div class="tb" title="Scheduled threats"><i class="ic bolt"></i><b id="tbThreats">0</b></div>
+    <div class="tb" title="Stars earned"><i class="ic star"></i><b id="starTotal"></b></div>
+  </div>
+  <div id="levelName"></div>
+  <div class="hdr-right">
+    <div id="money" title="Budget left"><small>budget left</small><b id="tbLeft">-</b></div>
+    <button id="btnHelp" class="btn small">HELP</button>
+    <button id="btnMute" class="btn small">SOUND ON</button>
+    <button id="btnLevels" class="btn small">LEVELS</button>
+  </div>
+</header>
+
+<main>
+  <aside id="left" class="panel">
+    <h2>BUILD</h2>
+    <div id="palette"></div>
+    <div id="hint" class="box">Pick a component, click the map to place it. Drag node to node to link. Right-click deletes.</div>
+  </aside>
+
+  <section id="center">
+    <div id="stage" class="panel">
+      <canvas id="world" width="350" height="162"></canvas>
+      <div id="toast"></div>
+    </div>
+    <div id="controls" class="panel">
+      <button id="btnRun" class="btn go">RUN</button>
+      <button id="btnSpeed" class="btn">SPEED 1x</button>
+      <button id="btnClear" class="btn">CLEAR</button>
+      <button id="btnSolution" class="btn" disabled title="Unlocks after one failed run">SHOW A SOLUTION</button>
+      <div id="timebar"><div id="timefill"></div><div id="timemarks"></div><span id="timetext">0s</span></div>
+    </div>
+    <div id="chaos" class="panel hidden">
+      <b>CHAOS:</b>
+      <button class="btn small bad" data-chaos="web">KILL SERVER</button>
+      <button class="btn small bad" data-chaos="db">KILL DB</button>
+      <button class="btn small bad" data-chaos="cache">KILL CACHE</button>
+      <button class="btn small bad" data-chaos="worker">KILL WORKER</button>
+      <button class="btn small bad" data-chaos="az">AZ OUTAGE</button>
+      <button class="btn small bad" data-chaos="spike">SPIKE x4</button>
+    </div>
+    <div id="live" class="panel">
+      <div class="stats">
+        <div><label>TRAFFIC</label><b id="stRate">-</b></div>
+        <div><label>AVAILABILITY</label><b id="stAvail">-</b></div>
+        <div><label>LATENCY</label><b id="stLat">-</b></div>
+        <div><label>COST / MO</label><b id="stCost">-</b></div>
+        <div><label>BACKLOG</label><b id="stBacklog">-</b></div>
+      </div>
+      <canvas id="chart" width="600" height="56"></canvas>
+      <div id="log"></div>
+    </div>
+  </section>
+
+  <aside id="right" class="panel">
+    <h2>MISSION</h2>
+    <div id="brief"></div>
+    <h2>SELECTED</h2>
+    <div id="inspect" class="box">Nothing selected.</div>
+  </aside>
+</main>
+
+<div id="levels" class="overlay hidden"><div class="modal wide">
+  <h2>CHOOSE A SCENARIO</h2>
+  <p class="sub">Each one teaches one idea, then tries to break your design.</p>
+  <div id="levelGrid"></div>
+</div></div>
+
+<div id="result" class="overlay hidden"><div class="modal">
+  <h2 id="resTitle"></h2>
+  <div id="resStars"></div>
+  <table id="resChecks"></table>
+  <h3>POST-MORTEM</h3>
+  <ul id="resAdvice"></ul>
+  <div id="resLesson" class="box"></div>
+  <div class="row">
+    <button id="btnRetry" class="btn">KEEP BUILDING</button>
+    <button id="btnNext" class="btn go">NEXT SCENARIO</button>
+  </div>
+</div></div>
+
+<div id="help" class="overlay hidden"><div class="modal">
+  <h2>HOW TO PLAY</h2>
+  <ul class="help">
+    <li><b>Place:</b> pick a component on the left, click a tile.</li>
+    <li><b>Link:</b> drag from one node onto another. Start from the Users icon. Drag the same link again to remove it.</li>
+    <li><b>Move:</b> drag a node onto an empty tile.</li>
+    <li><b>Delete:</b> right-click a node, or select it and press Delete.</li>
+    <li><b>Zones:</b> the three bands, top to bottom, are Availability Zones. An AZ outage kills every zonal node in that band. CDN, Load Balancer and Queue are managed services and survive.</li>
+    <li><b>Packets:</b> <i class="dot s"></i> static <i class="dot r"></i> read <i class="dot w"></i> write <i class="dot a"></i> async job.</li>
+    <li><b>Red X over a node:</b> a request was dropped there. A label says why: OVERLOAD, DB DOWN, NO DB LINK, NO BACKEND, READ-ONLY. Click the node during a run for the full breakdown.</li>
+    <li><b>Run:</b> traffic flows, chaos fires on schedule. Meet every requirement to pass. Spend 80% of budget or less for 3 stars.</li>
+  </ul>
+  <div class="row"><button id="btnHelpClose" class="btn go">GOT IT</button></div>
+</div></div>
+
+<script src="js/components.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/scenarios.js"></script>
+<script src="js/sprites.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
