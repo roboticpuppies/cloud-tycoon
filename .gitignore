@@ -12,6 +12,7 @@ npm-debug.log*
 
 # Screenshots and headless browser profiles from UI checks
 *.png
+!docs/*.png
 prof/
 prof2/
 

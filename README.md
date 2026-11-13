@@ -2,17 +2,32 @@
 
 A 2D pixel game for learning cloud architecture design. Build an architecture on a map of three stacked Availability Zones, hit RUN, and watch traffic flow while scheduled failures try to break it. Aimed at junior SRE, Cloud and DevOps engineers.
 
-## Play
+![Cloud Tycoon during the Black Friday scenario, with AZ-a down](docs/screenshot.png)
+
+## Run it
 
 Open `index.html` in a browser. No build step, no server, no dependencies.
 
 ```bash
 xdg-open index.html
-# or serve it
+# or serve it and open http://localhost:8000
 python3 -m http.server 8000
 ```
 
 Progress and designs are saved in the browser's localStorage.
+
+## How to play
+
+1. **Pick a scenario.** Start with "Hello, Cloud". The Mission panel on the right shows the story, the traffic mix, the targets, the budget and the threat forecast.
+2. **Build.** Pick a component on the left and click a tile to place it. The three bands on the map are Availability Zones, top to bottom.
+3. **Link.** Drag from the Users icon to your first component, then from node to node, so requests have a path: for example Users, Load Balancer, Web Server, DB Primary.
+4. **Watch the budget.** The "budget left" number in the top right updates as you build. Going over budget fails the run.
+5. **Hit RUN.** Traffic flows as coloured packets: yellow static, blue read, orange write, purple async job. Threats fire at the times shown in the forecast.
+6. **Read the map.** A label appears over any node in trouble: `CRASHED`, `AZ DOWN`, `OVERLOAD`, `DB DOWN`, `NO DB LINK`, `FAILOVER`. A red X means a request was dropped there. Click a node during the run for the breakdown.
+7. **Read the post-mortem.** The result screen lists each target and explains what broke and how to fix it. Fix the design and run again.
+8. **Stuck?** After one failed run, SHOW A SOLUTION loads one working design. There are other valid answers.
+
+Meeting every target gives 2 stars. Doing it at 80% of budget or less gives 3.
 
 ## Controls
 
