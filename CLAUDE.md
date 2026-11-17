@@ -42,6 +42,17 @@ Run `node test/check.js` after any change to `js/components.js`, `js/sim.js` or 
 - Scoring: all checks pass gives 2 stars, cost at 80% of budget or less gives 3, availability alone gives 1.
 - Cost is a fixed monthly price per component. Auto scaling adds a per-instance price averaged over the run. There is no data transfer cost yet.
 
+## Network levels
+
+The first six scenarios (`net: true`, written in Indonesian for vocational students) teach AWS networking as one story. Rules that only apply when `scenario.net` is set:
+
+- The grid is one VPC. `subnetOf(col)`: columns 0-1 are outside the VPC (`igw`, `s3`), 2-6 public subnets, 7-11 private subnets. `canPlace` enforces this in the UI and in `test/check.js`.
+- Users must enter through `igw` (or `s3` for static). The IGW only delivers to nodes in a public subnet.
+- Node `cfg` holds the settings edited in the SELECTED panel: `http`, `https`, `ssh` (`myip`/`any`) on web kinds, `dbsrc` (`web`/`any`) on `db`, `s3auth` (`key`/`role`) on web kinds, `public` on `s3`. Unset means closed, like a new Security Group.
+- `Sim.audit()` returns best-practice findings. Any finding fails the run (check key `audit`). Scenario flags switch rules on: `needSsh`, `uploads`, `privateApp`, `egress`, `elastic`, `localDb`.
+- The `scan` event kills every node that is internet-reachable with a port open to 0.0.0.0/0.
+- `carry: '<id>'` makes a level start from the design saved for the previous level. `start` is the previous level's solution, so the check proves each level demands something new.
+
 ## Adding or changing a scenario
 
 1. Edit `SCENARIOS` in `js/scenarios.js`. Reference designs use the compact `design(nodes, edges)` helper: nodes are `[kind, col, row, cfg?]`, edges are `'from>to'` strings, ids are generated as `kind-N` in order.

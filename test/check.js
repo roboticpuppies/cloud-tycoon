@@ -1,7 +1,7 @@
 // Headless check: every reference solution must pass, every "naive" design must fail.
 const { SCENARIOS, makeDesign } = require('../js/scenarios.js');
 const { Sim, analyze } = require('../js/sim.js');
-const { designCost, canLink, COMPONENTS } = require('../js/components.js');
+const { designCost, canLink, canPlace, COMPONENTS } = require('../js/components.js');
 
 const naive = makeDesign([['web', 1, 2], ['db', 2, 2]], ['users>web-1', 'web-1>db-1']);
 let bad = 0;
@@ -13,6 +13,7 @@ for (const sc of SCENARIOS) {
     if (!fk || !tk || !canLink(fk, tk)) { console.log('  BAD EDGE', sc.id, e); bad++; }
   }
   for (const n of sc.solution.nodes) if (!sc.allowed.includes(n.kind)) { console.log('  NOT ALLOWED', sc.id, n.kind); bad++; }
+  if (sc.net) for (const n of sc.solution.nodes) if (!canPlace(n.kind, n.col)) { console.log('  BAD PLACEMENT', sc.id, n.id); bad++; }
   const sim = new Sim(sc.solution, sc); const r = sim.runAll();
   const line = r.checks.map(c => `${c.key}=${c.fmt(c.value)}${c.pass ? '' : '(X)'}`).join(' ');
   console.log(`${r.pass ? 'PASS' : 'FAIL'} ${'*'.repeat(r.stars).padEnd(3)} ${sc.id.padEnd(12)} ${line}  3*<=${Math.round(sc.budget * .8)}`);

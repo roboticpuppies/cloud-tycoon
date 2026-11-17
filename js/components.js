@@ -2,6 +2,21 @@
 // cap = requests per second, cost = $/month (fake but proportional), lat = ms added per hop.
 (function (global) {
   const COMPONENTS = {
+    igw: {
+      name: 'Internet Gateway', cost: 0, cap: 1e6, lat: 1, zoneless: true, max: 1,
+      desc: 'Pintu VPC ke internet. Tanpa IGW, tidak ada paket dari internet yang bisa masuk atau keluar VPC. Gratis, satu per VPC.',
+      tip: 'Users -> IGW -> server di PUBLIC subnet. Server di private subnet tidak bisa dijangkau dari internet.'
+    },
+    nat: {
+      name: 'NAT Gateway', cost: 35, cap: 1e6, lat: 1,
+      desc: 'Jalan KELUAR ke internet untuk server di private subnet (update paket, panggil API pembayaran). Internet tidak bisa memulai koneksi masuk lewat NAT. Hidup di satu AZ.',
+      tip: 'Taruh di PUBLIC subnet. Satu NAT per AZ, supaya private subnet tidak ikut mati saat AZ lain padam.'
+    },
+    s3: {
+      name: 'S3 Bucket', cost: 5, cap: 1e6, lat: 10, zoneless: true,
+      desc: 'Object storage untuk aset (foto, CSS, JS). Berada di luar VPC, tahan AZ outage. Bucket baru selalu PRIVATE: buka public-read hanya untuk bucket aset.',
+      tip: 'Users -> S3 untuk aset publik. Web -> S3 untuk upload, pakai IAM Role, bukan access key.'
+    },
     cdn: {
       name: 'CDN', cost: 60, cap: 1e6, lat: 5, zoneless: true,
       desc: 'Edge cache. Serves STATIC requests at the edge, never touching origin latency. Managed, multi-region: immune to AZ outages.',
@@ -56,12 +71,15 @@
 
   // Allowed links: from kind -> set of to kinds. 'users' is the traffic source.
   const LINK_RULES = {
-    users:   ['cdn', 'lb', 'web', 'webxl', 'asg'],
+    users:   ['cdn', 'lb', 'web', 'webxl', 'asg', 'igw', 's3'],
+    igw:     ['lb', 'web', 'webxl', 'asg'],
+    nat:     [],
+    s3:      [],
     cdn:     ['lb', 'web', 'webxl', 'asg'],
     lb:      ['web', 'webxl', 'asg'],
-    web:     ['cache', 'db', 'replica', 'queue'],
-    webxl:   ['cache', 'db', 'replica', 'queue'],
-    asg:     ['cache', 'db', 'replica', 'queue'],
+    web:     ['cache', 'db', 'replica', 'queue', 's3'],
+    webxl:   ['cache', 'db', 'replica', 'queue', 's3'],
+    asg:     ['cache', 'db', 'replica', 'queue', 's3'],
     cache:   ['db', 'replica'],
     db:      ['replica'],
     replica: [],
@@ -76,6 +94,12 @@
   const GRID = { cols: 12, rows: 6, zones: 3 };
   // Zones are horizontal bands stacked top to bottom; traffic flows left to right through them.
   function zoneOf(row) { return Math.min(GRID.zones - 1, Math.floor(row / (GRID.rows / GRID.zones))); }
+
+  // Network scenarios (scenario.net): the grid is one VPC. Columns 0-1 are outside it,
+  // 2-6 are the public subnets, 7-11 the private subnets. Each AZ band has one of each.
+  const EDGE_KINDS = ['igw', 's3', 'cdn'];
+  function subnetOf(col) { return col < 2 ? 'edge' : col < 7 ? 'public' : 'private'; }
+  function canPlace(kind, col) { return EDGE_KINDS.includes(kind) === (subnetOf(col) === 'edge'); }
 
   function canLink(fromKind, toKind) {
     return (LINK_RULES[fromKind] || []).includes(toKind);
@@ -92,6 +116,6 @@
     return c;
   }
 
-  const api = { COMPONENTS, LINK_RULES, WEB_KINDS, FLOW_KINDS, FLOW_COLORS, GRID, zoneOf, canLink, designCost };
+  const api = { COMPONENTS, LINK_RULES, WEB_KINDS, FLOW_KINDS, FLOW_COLORS, GRID, zoneOf, subnetOf, canPlace, canLink, designCost };
   if (typeof module !== 'undefined') module.exports = api; else Object.assign(global, api);
 })(typeof window !== 'undefined' ? window : globalThis);

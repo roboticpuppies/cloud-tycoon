@@ -7,6 +7,7 @@
   const W = cv.width, H = cv.height;
   const USERS = { x: 16, y: GY + GRID.rows * TILE / 2 };
   const ZONE_TINT = [['#f3f7df', '#e6efcb'], ['#e3f1f4', '#d3e6ec'], ['#f6efdc', '#ebe1c6']]; // checker floor per zone
+  const NET_TINT = { edge: ['#e9e9e4', '#dcdcd5'], public: ['#f6f3cf', '#ece8b8'], private: ['#dbe6f6', '#c9d8ee'] }; // floor per subnet type in network levels
   const INK = '#0b3009';
   const SIM_SPEED = 2; // sim seconds per real second at 1x
 
@@ -78,9 +79,16 @@
   function place(kind, col, row) {
     const def = COMPONENTS[kind];
     if (nodeAt(col, row)) return;
-    if (def.max && S.design.nodes.filter(n => n.kind === kind).length >= def.max) { toast(`Only ${def.max} ${def.name} allowed. Use replicas.`); sfx.err(); return; }
+    if (!placeOk(kind, col)) return;
+    if (def.max && S.design.nodes.filter(n => n.kind === kind).length >= def.max) { toast(`Only ${def.max} ${def.name} allowed.${kind === 'db' ? ' Use replicas.' : ''}`); sfx.err(); return; }
     const n = { id: newId(kind), kind, col, row, cfg: kind === 'asg' ? { min: 1 } : {} };
     S.design.nodes.push(n); S.selected = n.id; sfx.place(); changed();
+  }
+  // Network levels: IGW and S3 sit outside the VPC, everything else inside a subnet.
+  function placeOk(kind, col) {
+    if (!S.sc.net || canPlace(kind, col)) return true;
+    toast(subnetOf(col) === 'edge' ? `${COMPONENTS[kind].name} harus berada di dalam VPC, di public atau private subnet.` : `${COMPONENTS[kind].name} berada di luar VPC: taruh di dua kolom paling kiri.`);
+    sfx.err(); return false;
   }
   function removeNode(id) {
     S.design.nodes = S.design.nodes.filter(n => n.id !== id);
@@ -125,7 +133,7 @@
     const target = p.inGrid ? nodeAt(p.col, p.row) : null;
     if (!d.moved) { if (d.from !== 'users') { S.selected = d.from; renderInspect(); } return; }
     if (target && target.id !== d.from) { toggleLink(d.from, target.id); return; }
-    if (!target && p.inGrid && d.from !== 'users') { const n = byId(d.from); n.col = p.col; n.row = p.row; sfx.place(); changed(); return; }
+    if (!target && p.inGrid && d.from !== 'users') { const n = byId(d.from); if (!placeOk(n.kind, p.col)) return; n.col = p.col; n.row = p.row; sfx.place(); changed(); return; }
     if (!target && p.onUsers && d.from !== 'users') toast('Traffic flows out of Users, not into them. Drag from Users to the node.');
   });
   cv.addEventListener('pointerleave', () => { S.hover = null; });
@@ -169,7 +177,8 @@
   }
 
   // ---------- panels ----------
-  const EV_TEXT = e => e.type === 'kill' ? `${[].concat(e.target).includes('db') ? 'database' : [].concat(e.target).includes('cache') ? 'cache' : [].concat(e.target).includes('worker') ? 'worker' : 'server'} crash (${e.duration}s)`
+  const EV_TEXT = e => e.type === 'scan' ? 'bot memindai port 22 dan 3306 yang terbuka ke internet'
+    : e.type === 'kill' ? `${[].concat(e.target).includes('db') ? 'database' : [].concat(e.target).includes('cache') ? 'cache' : [].concat(e.target).includes('worker') ? 'worker' : 'server'} crash (${e.duration}s)`
     : e.type === 'az' ? `AZ outage, ${e.zone === 'busiest' ? 'your busiest zone' : 'AZ-' + 'abc'[e.zone]} (${e.duration}s)` : `traffic spike x${e.mult} (${e.duration}s)`;
 
   function renderBrief() {
@@ -191,8 +200,22 @@
       <div class="req"><span>Availability</span><b>&ge; ${sc.targets.availability}%</b></div>
       <div class="req"><span>Avg latency</span><b>&le; ${sc.targets.latency}ms</b></div>
       ${m.async ? `<div class="req"><span>Jobs completed</span><b>&ge; ${sc.targets.jobs || 95}%</b></div>` : ''}
+      ${sc.net ? '<div class="req"><span>Audit keamanan</span><b>0 temuan</b></div>' : ''}
       ${isFinite(sc.budget) ? `<div class="req"><span>Budget</span><b class="${over ? 'bad' : ''}">$${cost} / $${sc.budget}</b></div>` : `<div class="req"><span>Cost</span><b>$${cost}</b></div>`}
       ${sc.events.length ? `<h3>THREAT FORECAST</h3>${sc.events.map(e => `<div class="req threat"><span>t=${e.t}s</span><span>${esc(EV_TEXT(e))}</span></div>`).join('')}` : (sc.sandbox ? '<h3>THREATS</h3><div class="info">You are the threat. Chaos buttons appear when you hit Run.</div>' : '<h3>THREAT FORECAST</h3><div class="info">Clear skies.</div>')}`;
+  }
+
+  // Per-node settings in network levels. Click cycles through the values; the first one is the AWS default.
+  const OPEN = [[0, 'TUTUP'], [1, '0.0.0.0/0']];
+  function netFields(n) {
+    if (WEB_KINDS.includes(n.kind)) return [
+      { key: 'http', label: 'SG masuk 80 (HTTP)', vals: OPEN },
+      { key: 'https', label: 'SG masuk 443 (HTTPS)', vals: OPEN },
+      { key: 'ssh', label: 'SG masuk 22 (SSH)', vals: [[0, 'TUTUP'], ['myip', 'MY IP /32'], ['any', '0.0.0.0/0']] },
+      ...(S.sc.allowed.includes('s3') ? [{ key: 's3auth', label: 'Akses ke S3', vals: [[0, 'TIDAK ADA'], ['key', 'ACCESS KEY DI .ENV'], ['role', 'IAM ROLE']] }] : [])];
+    if (n.kind === 'db') return [{ key: 'dbsrc', label: 'SG masuk 3306 (MySQL)', vals: [[0, 'TUTUP'], ['web', 'DARI SG-WEB'], ['any', '0.0.0.0/0']] }];
+    if (n.kind === 's3') return [{ key: 'public', label: 'Akses bucket', vals: [[0, 'PRIVATE'], [1, 'PUBLIC READ']] }];
+    return [];
   }
 
   function renderInspect() {
@@ -206,6 +229,15 @@
     let h = `<div class="ttl">${esc(n.id)}</div>
       <div><b>${esc(d.name)}</b> &middot; ${d.zoneless ? 'managed, multi-AZ' : 'AZ-' + 'abc'[zoneOf(n.row)]}</div>
       <div>Capacity: <b>${cap}</b> &middot; Cost: <b>$${d.cost}${n.kind === 'asg' ? ' + $' + d.perInstance * (n.cfg.min || 1) : ''}</b> &middot; +${d.lat}ms</div>`;
+    if (S.sc.net) {
+      const sub = subnetOf(n.col), z = zoneOf(n.row);
+      h += `<div>Lokasi: <b>${sub === 'edge' ? 'luar VPC' : `${sub} subnet ${'abc'[z]} (10.0.${z + 1 + (sub === 'private' ? 10 : 0)}.0/24)`}</b></div>`;
+      for (const f of netFields(n)) {
+        const cur = f.vals.find(v => v[0] === (n.cfg[f.key] || 0)) || f.vals[0];
+        h += `<div>${f.label}: <button class="mini" data-cfg="${f.key}" ${S.sim ? 'disabled' : ''}>${cur[1]}</button></div>`;
+      }
+      if (n.kind === 'replica') h += `<div>Security Group: <b>sama dengan DB Primary</b></div>`;
+    }
     if (n.kind === 'asg') h += `<div>Min instances: <button class="mini" data-min="-1">-</button> <b>${n.cfg.min || 1}</b> <button class="mini" data-min="1">+</button></div>`;
     if (sn) {
       const c = S.sim.capOf(sn);
@@ -224,6 +256,10 @@
     box.innerHTML = h;
     box.querySelectorAll('[data-from]').forEach(b => b.onclick = () => toggleLink(b.dataset.from, b.dataset.to));
     box.querySelectorAll('[data-min]').forEach(b => b.onclick = () => { n.cfg.min = Math.max(1, Math.min(d.maxInstances, (n.cfg.min || 1) + +b.dataset.min)); changed(); });
+    box.querySelectorAll('[data-cfg]').forEach(b => b.onclick = () => {
+      const f = netFields(n).find(x => x.key === b.dataset.cfg), i = f.vals.findIndex(v => v[0] === (n.cfg[f.key] || 0));
+      n.cfg[f.key] = f.vals[(i + 1) % f.vals.length][0]; changed();
+    });
     const del = box.querySelector('[data-del]'); if (del) del.onclick = () => removeNode(n.id);
   }
 
@@ -367,15 +403,16 @@
   }
   function loadScenario(sc) {
     S.sc = sc; S.selected = null; S.lastResult = null; S.tool = null;
-    const saved = store.get('design.' + sc.id, null);
-    S.design = saved && saved.nodes ? saved : (sc.start ? clone(sc.start) : { nodes: [], edges: [] });
+    // Levels with `carry` continue from the design the player left in the previous level.
+    const saved = store.get('design.' + sc.id, null) || (sc.carry ? store.get('design.' + sc.carry, null) : null);
+    S.design = saved && saved.nodes ? clone(saved) : (sc.start ? clone(sc.start) : { nodes: [], edges: [] });
     S.design.nodes = S.design.nodes.filter(n => COMPONENTS[n.kind]);
     store.set('last', sc.id);
     $('log').innerHTML = ''; logLine({ t: 0, text: `${sc.title}: build, then RUN`, level: 'info' });
     $('btnSolution').disabled = !(sc.solution && (S.fails[sc.id] || 0) >= 1);
     $('btnSolution').classList.toggle('hidden', !sc.solution);
     renderPalette(); renderBrief(); renderInspect(); renderStats(); renderTimeMarks(); renderHeader(); drawChart();
-    $('hint').innerHTML = sc.start && !saved ? 'This design is already running in prod. <b>Right-click</b> nodes to delete what you do not need.' : 'Pick a component, click the map to place it. <b>Drag node to node</b> to link. Start from the <b>Users</b> icon. Right-click deletes.';
+    $('hint').innerHTML = sc.net ? `${sc.carry ? 'Ini arsitektur dari level sebelumnya. Lanjutkan dari sini. ' : ''}<b>Klik node</b> untuk mengatur Security Group. Internet Gateway dan S3 ditaruh di luar VPC (dua kolom kiri).` : sc.start && !saved ? 'This design is already running in prod. <b>Right-click</b> nodes to delete what you do not need.' : 'Pick a component, click the map to place it. <b>Drag node to node</b> to link. Start from the <b>Users</b> icon. Right-click deletes.';
   }
 
   // ---------- drawing ----------
@@ -408,7 +445,7 @@
     const gw = GRID.cols * TILE, zh = GRID.rows / GRID.zones * TILE;
     for (let z = 0; z < GRID.zones; z++) {
       const zy = GY + z * zh;
-      for (let c = 0; c < GRID.cols; c++) for (let r = 0; r < GRID.rows / GRID.zones; r++) { ctx.fillStyle = ZONE_TINT[z][(c + r) % 2]; ctx.fillRect(GX + c * TILE, zy + r * TILE, TILE, TILE); }
+      for (let c = 0; c < GRID.cols; c++) for (let r = 0; r < GRID.rows / GRID.zones; r++) { ctx.fillStyle = (S.sc.net ? NET_TINT[subnetOf(c)] : ZONE_TINT[z])[(c + r) % 2]; ctx.fillRect(GX + c * TILE, zy + r * TILE, TILE, TILE); }
       ctx.fillStyle = 'rgba(11,48,9,0.25)'; ctx.fillRect(GX + 2, zy + zh, gw, 2); // drop shadow under the slab
       ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.strokeRect(GX + 0.5, zy + 0.5, gw - 1, zh - 1);
       const down = S.azDown === z;
@@ -420,6 +457,15 @@
       const lc = down && (S.frame >> 4) % 2 ? '#ff8fa3' : down ? '#ffe066' : '#ffffff';
       text(`AZ-${'abc'[z]}`, GX + gw + 15, zy + zh / 2 - (down ? 9 : 4), lc, 'center');
       if (down) text('DOWN', GX + gw + 15, zy + zh / 2 + 1, lc, 'center');
+    }
+
+    if (S.sc.net) {
+      const x0 = GX + 2 * TILE, x1 = GX + 7 * TILE, gh = GRID.rows * TILE;
+      ctx.fillStyle = INK; ctx.fillRect(x1 - 1, GY, 2, gh);                       // public | private
+      ctx.strokeStyle = '#e8590c'; ctx.lineWidth = 2; ctx.strokeRect(x0, GY + 1, GX + gw - x0 - 1, gh - 2); // the VPC
+      text('LUAR VPC', GX + TILE, 2, '#ffffff', 'center');
+      text('VPC: PUBLIC SUBNET', (x0 + x1) / 2, 2, '#ffe066', 'center');
+      text('VPC: PRIVATE SUBNET', (x1 + GX + gw) / 2, 2, '#bfe3ff', 'center');
     }
 
     // edges
