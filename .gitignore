@@ -20,3 +20,7 @@ prof2/
 .env
 .env.*
 .claude/settings.local.json
+
+# Site files collected for deploy
+dist/
+.wrangler/

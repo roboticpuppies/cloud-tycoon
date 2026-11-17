@@ -1,0 +1,9 @@
+{
+  // Static-assets-only Worker. CI copies the site into dist/ before deploying,
+  // so only index.html, css/ and js/ are published.
+  "name": "cloud-tycoon",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}

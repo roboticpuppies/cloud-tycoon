@@ -13,6 +13,10 @@ node test/check.js         # headless balance check, must print "all good"
 
 Run `node test/check.js` after any change to `js/components.js`, `js/sim.js` or `js/scenarios.js`. It asserts every reference design passes its scenario and the naive single-server design fails it. It also validates that reference designs only use allowed components and legal links.
 
+## Deploy
+
+Pushing to `main` runs `.github/workflows/deploy.yml`: the balance check, then `wrangler deploy` to the `cloud-tycoon` Cloudflare Worker (static assets only, see `wrangler.jsonc`). Pull requests run the check without deploying. The workflow copies `index.html`, `css/` and `js/` into `dist/`; a new top-level site file must be added to that copy step. Needs the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+
 ## Constraints
 
 - **No build step, no dependencies, no ES modules.** The game must work when `index.html` is opened from `file://`, which blocks module imports. Scripts load in order through plain `<script>` tags.
