@@ -41,12 +41,12 @@
     'replica-readonly': 'write hit a read-only replica',
     'queue-full': 'queue backlog overflowed',
     'dead-entry': 'users were sent straight to a dead server',
-    'no-igw': 'VPC tidak punya jalur dari internet (lewat Internet Gateway)',
-    'private-subnet': 'node ada di private subnet, tidak bisa dijangkau dari internet',
-    'sg-blocked': 'port ditutup oleh Security Group',
-    'bucket-private': 'bucket S3 masih private (403 Forbidden)',
-    'no-iam': 'server tidak punya izin IAM ke S3 (AccessDenied)',
-    'no-egress': 'server tidak punya jalan keluar ke internet (butuh NAT Gateway)'
+    'no-igw': 'no path from the internet into the VPC (needs an Internet Gateway)',
+    'private-subnet': 'node is in a private subnet and cannot be reached from the internet',
+    'sg-blocked': 'port closed by the Security Group',
+    'bucket-private': 'S3 bucket is still private (403 Forbidden)',
+    'no-iam': 'server has no IAM permission for S3 (AccessDenied)',
+    'no-egress': 'server has no way out to the internet (needs a NAT Gateway)'
   };
 
   class Sim {
@@ -115,22 +115,22 @@
       const sub = n => subnetOf(n.col);
       for (const n of this.nodes) {
         if (WEB_KINDS.includes(n.kind)) {
-          if (n.cfg.ssh === 'any') out.push(`${n.id}: port 22 (SSH) terbuka ke 0.0.0.0/0. Bot di internet mencoba login setiap menit. Batasi ke My IP saja.`);
-          else if (sc.needSsh && n.cfg.ssh !== 'myip') out.push(`${n.id}: port 22 (SSH) tertutup, developer tidak bisa masuk untuk deploy. Buka 22 hanya untuk My IP.`);
-          if (n.cfg.s3auth === 'key') out.push(`${n.id}: access key ditanam di server. Key seperti ini sering bocor ke GitHub dan berlaku selamanya. Pakai IAM Role.`);
-          if (sc.uploads && !this.out[n.id].some(o => o.kind === 's3')) out.push(`${n.id}: upload masih disimpan di disk server, hilang saat server diganti. Link Web -> S3.`);
-          if (sc.elastic && n.kind !== 'asg') out.push(`${n.id}: server tetap tidak bisa mengikuti lonjakan promo, dan dibayar penuh saat sepi. Ganti dengan Auto Scaling.`);
-          if (sc.privateApp && sub(n) === 'public') out.push(`${n.id}: server di belakang Load Balancer tidak perlu IP publik. Pindahkan ke private subnet.`);
+          if (n.cfg.ssh === 'any') out.push(`${n.id}: port 22 (SSH) is open to 0.0.0.0/0. Bots on the internet try to log in every minute. Allow My IP only.`);
+          else if (sc.needSsh && n.cfg.ssh !== 'myip') out.push(`${n.id}: port 22 (SSH) is closed, so the developer cannot log in to deploy. Open 22 to My IP only.`);
+          if (n.cfg.s3auth === 'key') out.push(`${n.id}: an access key is stored on the server. Keys like this leak to GitHub and never expire. Use an IAM Role.`);
+          if (sc.uploads && !this.out[n.id].some(o => o.kind === 's3')) out.push(`${n.id}: uploads are saved on the server disk and are lost when the server is replaced. Link Web -> S3.`);
+          if (sc.elastic && n.kind !== 'asg') out.push(`${n.id}: a fixed server cannot follow the sale spike and is paid in full when traffic is low. Replace it with Auto Scaling.`);
+          if (sc.privateApp && sub(n) === 'public') out.push(`${n.id}: a server behind the Load Balancer does not need a public IP. Move it to a private subnet.`);
         }
         if (n.kind === 'db' || n.kind === 'replica') {
-          if (sub(n) === 'public') out.push(`${n.id}: database ada di public subnet. Database tidak pernah perlu dijangkau dari internet. Pindahkan ke private subnet.`);
-          if (n.kind === 'db' && n.cfg.dbsrc === 'any') out.push(`${n.id}: port 3306 terbuka ke 0.0.0.0/0. Sumbernya cukup Security Group web server (sg-web).`);
+          if (sub(n) === 'public') out.push(`${n.id}: the database is in a public subnet. A database never needs to be reached from the internet. Move it to a private subnet.`);
+          if (n.kind === 'db' && n.cfg.dbsrc === 'any') out.push(`${n.id}: port 3306 is open to 0.0.0.0/0. The only source it needs is the web server Security Group (sg-web).`);
         }
       }
       if (sc.privateApp) for (let z = 0; z < GRID.zones; z++) {
         const here = n => n.zone === z;
         if (this.nodes.some(n => WEB_KINDS.includes(n.kind) && sub(n) === 'private' && here(n)) && this.nodes.some(n => n.kind === 'nat') && !this.nodes.some(n => n.kind === 'nat' && here(n)))
-          out.push(`AZ-${'abc'[z]} punya server private tapi tidak punya NAT Gateway sendiri. Kalau AZ tempat NAT padam, server di sini kehilangan akses internet.`);
+          out.push(`AZ-${'abc'[z]} has private servers but no NAT Gateway of its own. If the AZ that holds the NAT goes down, these servers lose internet access.`);
       }
       return out;
     }
@@ -185,8 +185,8 @@
         for (const n of this.nodes) if (!n.def.zoneless && n.zone === zone) { n.azDead = true; this.kill(n, ev.duration, `lost with AZ-${'abc'[zone]}`); }
       } else if (ev.type === 'scan') {
         const hit = this.nodes.filter(n => !n.dead && this.exposed(n));
-        if (!hit.length) this.logMsg('bot scanner lewat: tidak ada port berbahaya yang terbuka', 'ok');
-        for (const n of hit) { this.kill(n, ev.duration, 'dibobol bot scanner!'); n.downWhy = 'HACKED'; }
+        if (!hit.length) this.logMsg('bot scanner passed by: no dangerous port is open', 'ok');
+        for (const n of hit) { this.kill(n, ev.duration, 'broken into by a bot scanner!'); n.downWhy = 'HACKED'; }
       } else if (ev.type === 'spike') {
         this.spike = ev.mult;
         this.logMsg(`traffic spike x${ev.mult}!`, 'warn');
@@ -457,7 +457,7 @@
       ];
       if (isFinite(this.sc.budget)) checks.push({ key: 'cost', label: 'Monthly cost', value: cost, target: this.sc.budget, cmp: '<=', fmt: v => '$' + Math.round(v), pass: cost <= this.sc.budget });
       if ((this.sc.mix.async || 0) > 0) checks.push({ key: 'jobs', label: 'Jobs completed', value: jobs, target: tg.jobs || 95, cmp: '>=', fmt: v => v.toFixed(1) + '%', pass: jobs + 1e-9 >= (tg.jobs || 95) });
-      if (this.sc.net) { const n = this.audit().length; checks.push({ key: 'audit', label: 'Audit keamanan', value: n, target: 0, cmp: '<=', fmt: v => v + ' temuan', pass: n === 0 }); }
+      if (this.sc.net) { const n = this.audit().length; checks.push({ key: 'audit', label: 'Security audit', value: n, target: 0, cmp: '<=', fmt: v => v + (v === 1 ? ' finding' : ' findings'), pass: n === 0 }); }
       const pass = checks.every(c => c.pass);
       let stars = 0;
       if (pass) stars = (isFinite(this.sc.budget) && cost <= this.sc.budget * 0.8) ? 3 : 2;
@@ -478,13 +478,13 @@
     const webs = kinds(WEB_KINDS), lbs = kinds('lb'), dbs = kinds('db'), reps = kinds('replica'), caches = kinds('cache'), cdns = kinds('cdn'), queues = kinds('queue'), workers = kinds('worker');
 
     for (const a of sim.audit()) out.push({ level: 'bad', text: 'Audit: ' + a });
-    if (f['no-igw']) out.push({ level: 'bad', text: `${pct(f['no-igw'])} request tidak pernah masuk ke VPC. VPC itu jaringan tertutup: pasang Internet Gateway, lalu link Users -> IGW -> server.` });
-    if (f['private-subnet']) out.push({ level: 'bad', text: `${pct(f['private-subnet'])} request ditujukan ke node di private subnet. Private subnet tidak punya rute dari internet. Yang menerima trafik user (web server, load balancer) harus di public subnet.` });
-    if (f['sg-blocked']) out.push({ level: 'bad', text: `${pct(f['sg-blocked'])} request ditolak Security Group. SG baru menolak semua trafik masuk. Web server: buka 80 dan 443. Database: buka 3306 dengan sumber sg-web. Klik node untuk mengaturnya.` });
-    if (f['bucket-private']) out.push({ level: 'bad', text: `${pct(f['bucket-private'])} request aset dijawab 403 oleh S3. Bucket baru selalu private. Klik bucket dan ubah ke PUBLIC READ (hanya untuk bucket aset).` });
-    if (f['no-iam']) out.push({ level: 'bad', text: `${pct(f['no-iam'])} upload gagal dengan AccessDenied. Server belum punya izin ke S3. Klik web server dan pasang IAM Role.` });
-    if (f['no-egress']) out.push({ level: 'bad', text: `${pct(f['no-egress'])} request gagal karena server di private subnet tidak bisa memanggil internet. Pasang NAT Gateway di PUBLIC subnet (dan pastikan ada Internet Gateway).` });
-    if (scenario.localDb && nodes.some(n => WEB_KINDS.includes(n.kind) && n.reasons.overload)) out.push({ level: 'bad', text: `Aplikasi dan MySQL berebut CPU di satu mesin: setiap query dihitung ${LOCAL_DB_WEIGHT}x. Ganti ke Big Web Server (vertical scaling).` });
+    if (f['no-igw']) out.push({ level: 'bad', text: `${pct(f['no-igw'])} of requests never entered the VPC. A VPC is a closed network: add an Internet Gateway, then link Users -> IGW -> server.` });
+    if (f['private-subnet']) out.push({ level: 'bad', text: `${pct(f['private-subnet'])} of requests were sent to a node in a private subnet. A private subnet has no route from the internet. Anything that receives user traffic (web server, load balancer) must be in a public subnet.` });
+    if (f['sg-blocked']) out.push({ level: 'bad', text: `${pct(f['sg-blocked'])} of requests were rejected by a Security Group. A new SG blocks all inbound traffic. Web server: open 80 and 443. Database: open 3306 with source sg-web. Click a node to set it.` });
+    if (f['bucket-private']) out.push({ level: 'bad', text: `${pct(f['bucket-private'])} of asset requests got a 403 from S3. A new bucket is always private. Click the bucket and switch it to PUBLIC READ (asset buckets only).` });
+    if (f['no-iam']) out.push({ level: 'bad', text: `${pct(f['no-iam'])} of requests failed on upload with AccessDenied. The server has no permission for S3 yet. Click the web server and attach an IAM Role.` });
+    if (f['no-egress']) out.push({ level: 'bad', text: `${pct(f['no-egress'])} of requests failed because a server in a private subnet could not call the internet. Add a NAT Gateway in a PUBLIC subnet (and make sure there is an Internet Gateway).` });
+    if (scenario.localDb && nodes.some(n => WEB_KINDS.includes(n.kind) && n.reasons.overload)) out.push({ level: 'bad', text: `The app and MySQL fight for the same CPU on one machine: every query counts ${LOCAL_DB_WEIGHT}x. Switch to a Big Web Server (vertical scaling).` });
     if (f['no-entry']) out.push({ level: 'bad', text: `Nothing was connected to Users. Drag from the Users icon to your first component.` });
     if (f['dead-entry']) out.push({ level: 'bad', text: `${pct(f['dead-entry'])} of requests went straight to a dead server. DNS does not health-check. Put a Load Balancer in front so traffic only reaches live backends.` });
     if (f['no-backend']) out.push({ level: 'bad', text: `The Load Balancer had no live backend for ${pct(f['no-backend'])} of requests. One backend is a single point of failure. Add a second server, in a different AZ.` });

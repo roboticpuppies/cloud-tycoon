@@ -4,18 +4,18 @@
   const COMPONENTS = {
     igw: {
       name: 'Internet Gateway', cost: 0, cap: 1e6, lat: 1, zoneless: true, max: 1,
-      desc: 'Pintu VPC ke internet. Tanpa IGW, tidak ada paket dari internet yang bisa masuk atau keluar VPC. Gratis, satu per VPC.',
-      tip: 'Users -> IGW -> server di PUBLIC subnet. Server di private subnet tidak bisa dijangkau dari internet.'
+      desc: 'The door between the VPC and the internet. Without an IGW, no packet can enter or leave the VPC. Free, one per VPC.',
+      tip: 'Users -> IGW -> a server in a PUBLIC subnet. A server in a private subnet cannot be reached from the internet.'
     },
     nat: {
       name: 'NAT Gateway', cost: 35, cap: 1e6, lat: 1,
-      desc: 'Jalan KELUAR ke internet untuk server di private subnet (update paket, panggil API pembayaran). Internet tidak bisa memulai koneksi masuk lewat NAT. Hidup di satu AZ.',
-      tip: 'Taruh di PUBLIC subnet. Satu NAT per AZ, supaya private subnet tidak ikut mati saat AZ lain padam.'
+      desc: 'The way OUT to the internet for servers in a private subnet (package updates, payment API calls). The internet cannot start a connection inward through it. Lives in one AZ.',
+      tip: 'Place it in a PUBLIC subnet. One NAT per AZ, so a private subnet does not lose internet when another AZ goes down.'
     },
     s3: {
       name: 'S3 Bucket', cost: 5, cap: 1e6, lat: 10, zoneless: true,
-      desc: 'Object storage untuk aset (foto, CSS, JS). Berada di luar VPC, tahan AZ outage. Bucket baru selalu PRIVATE: buka public-read hanya untuk bucket aset.',
-      tip: 'Users -> S3 untuk aset publik. Web -> S3 untuk upload, pakai IAM Role, bukan access key.'
+      desc: 'Object storage for assets (photos, CSS, JS). Sits outside the VPC and survives AZ outages. A new bucket is always PRIVATE: allow public read only on an asset bucket.',
+      tip: 'Users -> S3 for public assets. Web -> S3 for uploads, with an IAM Role and not an access key.'
     },
     cdn: {
       name: 'CDN', cost: 60, cap: 1e6, lat: 5, zoneless: true,
