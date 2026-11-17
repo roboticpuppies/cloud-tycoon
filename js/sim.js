@@ -1,7 +1,7 @@
 // Traffic + chaos simulator. Pure logic, no DOM. Runs in the browser and in node (tests).
 (function (global) {
   const C = typeof module !== 'undefined' ? require('./components.js') : global;
-  const { COMPONENTS, WEB_KINDS, FLOW_KINDS, zoneOf, GRID } = C;
+  const { COMPONENTS, WEB_KINDS, FLOW_KINDS, zoneOf, subnetOf, GRID } = C;
 
   function mulberry32(a) {
     return function () {
@@ -19,11 +19,16 @@
   const CACHE_HIT = 0.8;
   const LOCAL_ASYNC_WEIGHT = 3;
   const LOCAL_ASYNC_LAT = 300;
+  const LOCAL_DB_WEIGHT = 2;   // monolith: MySQL on the web box competes for the same CPU
+  const LOCAL_DB_LAT = 10;
+  const HTTPS_SHARE = 0.8;     // share of user traffic on 443, the rest arrives on 80
 
   // Short label shown over a node while it is dropping requests.
   const REASON_LABEL = {
     'overload': 'OVERLOAD', 'db-dead': 'DB DOWN', 'no-db': 'NO DB LINK', 'no-route': 'NO ROUTE',
-    'no-backend': 'NO BACKEND', 'replica-readonly': 'READ-ONLY', 'queue-full': 'QUEUE FULL'
+    'no-backend': 'NO BACKEND', 'replica-readonly': 'READ-ONLY', 'queue-full': 'QUEUE FULL',
+    'no-igw': 'NO IGW', 'private-subnet': 'NO PUBLIC IP', 'sg-blocked': 'SG BLOCK',
+    'bucket-private': '403', 'no-iam': 'ACCESS DENIED', 'no-egress': 'NO INTERNET'
   };
   const REASON_TEXT = {
     'no-entry': 'nothing is connected to Users',
@@ -35,7 +40,13 @@
     'db-dead': 'database was down (no promoted replica)',
     'replica-readonly': 'write hit a read-only replica',
     'queue-full': 'queue backlog overflowed',
-    'dead-entry': 'users were sent straight to a dead server'
+    'dead-entry': 'users were sent straight to a dead server',
+    'no-igw': 'VPC tidak punya jalur dari internet (lewat Internet Gateway)',
+    'private-subnet': 'node ada di private subnet, tidak bisa dijangkau dari internet',
+    'sg-blocked': 'port ditutup oleh Security Group',
+    'bucket-private': 'bucket S3 masih private (403 Forbidden)',
+    'no-iam': 'server tidak punya izin IAM ke S3 (AccessDenied)',
+    'no-egress': 'server tidak punya jalan keluar ke internet (butuh NAT Gateway)'
   };
 
   class Sim {
@@ -77,6 +88,53 @@
     alive(n) { return !n.dead; }
     readable(n) { return (n.kind === 'db' || n.kind === 'replica') && !n.dead; }
     writable(n) { return (n.kind === 'db' || (n.kind === 'replica' && n.promoted)) && !n.dead; }
+    // ---------- network rules (scenario.net only) ----------
+    dbSrc(n) { const d = n.kind === 'replica' ? this.nodes.find(x => x.kind === 'db') || n : n; return d.cfg.dbsrc || 'off'; } // standby shares the primary's SG
+    sgBlock(n) {
+      if (WEB_KINDS.includes(n.kind)) return (n.cfg.https ? 0 : HTTPS_SHARE) + (n.cfg.http ? 0 : 1 - HTTPS_SHARE);
+      if (n.kind === 'db' || n.kind === 'replica') return this.dbSrc(n) === 'off' ? 1 : 0;
+      return 0;
+    }
+    hasIgw() { return this.nodes.some(n => n.kind === 'igw'); }
+    // Reachable from the internet with a port left open to the whole world.
+    exposed(n) {
+      if (subnetOf(n.col) !== 'public' || !this.hasIgw()) return false;
+      return (WEB_KINDS.includes(n.kind) && n.cfg.ssh === 'any') || ((n.kind === 'db' || n.kind === 'replica') && this.dbSrc(n) === 'any');
+    }
+    // Way out to the internet: true (public subnet), a NAT node (private subnet), or null.
+    egress(n) {
+      if (!this.hasIgw()) return null;
+      if (subnetOf(n.col) === 'public') return true;
+      const nats = this.nodes.filter(x => x.kind === 'nat' && !x.dead && subnetOf(x.col) === 'public');
+      return nats.find(x => x.zone === n.zone) || nats[0] || null;
+    }
+    // Best-practice findings on the design itself. Any finding fails the run.
+    audit() {
+      const sc = this.sc, out = [];
+      if (!sc.net) return out;
+      const sub = n => subnetOf(n.col);
+      for (const n of this.nodes) {
+        if (WEB_KINDS.includes(n.kind)) {
+          if (n.cfg.ssh === 'any') out.push(`${n.id}: port 22 (SSH) terbuka ke 0.0.0.0/0. Bot di internet mencoba login setiap menit. Batasi ke My IP saja.`);
+          else if (sc.needSsh && n.cfg.ssh !== 'myip') out.push(`${n.id}: port 22 (SSH) tertutup, developer tidak bisa masuk untuk deploy. Buka 22 hanya untuk My IP.`);
+          if (n.cfg.s3auth === 'key') out.push(`${n.id}: access key ditanam di server. Key seperti ini sering bocor ke GitHub dan berlaku selamanya. Pakai IAM Role.`);
+          if (sc.uploads && !this.out[n.id].some(o => o.kind === 's3')) out.push(`${n.id}: upload masih disimpan di disk server, hilang saat server diganti. Link Web -> S3.`);
+          if (sc.elastic && n.kind !== 'asg') out.push(`${n.id}: server tetap tidak bisa mengikuti lonjakan promo, dan dibayar penuh saat sepi. Ganti dengan Auto Scaling.`);
+          if (sc.privateApp && sub(n) === 'public') out.push(`${n.id}: server di belakang Load Balancer tidak perlu IP publik. Pindahkan ke private subnet.`);
+        }
+        if (n.kind === 'db' || n.kind === 'replica') {
+          if (sub(n) === 'public') out.push(`${n.id}: database ada di public subnet. Database tidak pernah perlu dijangkau dari internet. Pindahkan ke private subnet.`);
+          if (n.kind === 'db' && n.cfg.dbsrc === 'any') out.push(`${n.id}: port 3306 terbuka ke 0.0.0.0/0. Sumbernya cukup Security Group web server (sg-web).`);
+        }
+      }
+      if (sc.privateApp) for (let z = 0; z < GRID.zones; z++) {
+        const here = n => n.zone === z;
+        if (this.nodes.some(n => WEB_KINDS.includes(n.kind) && sub(n) === 'private' && here(n)) && this.nodes.some(n => n.kind === 'nat') && !this.nodes.some(n => n.kind === 'nat' && here(n)))
+          out.push(`AZ-${'abc'[z]} punya server private tapi tidak punya NAT Gateway sendiri. Kalau AZ tempat NAT padam, server di sini kehilangan akses internet.`);
+      }
+      return out;
+    }
+
     flow(from, to, amt, kind) { if (amt > 0) this.tickFlow.push({ from, to, amt, kind }); }
 
     ok(node, kind, amt, lat) {
@@ -125,6 +183,10 @@
         this.logMsg(`AZ-${'abc'[zone]} outage!`, 'bad');
         if (this.hooks.onAz) this.hooks.onAz(zone, true);
         for (const n of this.nodes) if (!n.def.zoneless && n.zone === zone) { n.azDead = true; this.kill(n, ev.duration, `lost with AZ-${'abc'[zone]}`); }
+      } else if (ev.type === 'scan') {
+        const hit = this.nodes.filter(n => !n.dead && this.exposed(n));
+        if (!hit.length) this.logMsg('bot scanner lewat: tidak ada port berbahaya yang terbuka', 'ok');
+        for (const n of hit) { this.kill(n, ev.duration, 'dibobol bot scanner!'); n.downWhy = 'HACKED'; }
       } else if (ev.type === 'spike') {
         this.spike = ev.mult;
         this.logMsg(`traffic spike x${ev.mult}!`, 'warn');
@@ -146,9 +208,14 @@
     route(node, kind, amt, lat, depth, viaEntry) {
       if (amt <= 0 || depth > 8) return;
       if (node.dead) { this.fail(node, kind, amt, viaEntry && !node.def.zoneless ? 'dead-entry' : 'dead'); return; }
+      if (this.sc.net) {
+        const b = this.sgBlock(node);
+        if (b > 0) { this.fail(node, kind, amt * b, 'sg-blocked'); amt *= 1 - b; if (amt <= 1e-9) return; }
+      }
       const cap = this.capOf(node);
       const localAsync = kind === 'async' && WEB_KINDS.includes(node.kind) && !this.out[node.id].some(o => o.kind === 'queue' && !o.dead);
-      const weight = localAsync ? LOCAL_ASYNC_WEIGHT : 1;
+      const localDb = this.sc.localDb && (kind === 'read' || kind === 'write') && WEB_KINDS.includes(node.kind) && !this.out[node.id].some(o => ['db', 'replica', 'cache'].includes(o.kind));
+      const weight = localAsync ? LOCAL_ASYNC_WEIGHT : localDb ? LOCAL_DB_WEIGHT : 1;
       const want = amt * weight / this.dt;             // req/s this batch wants
       node.demand += want;
       const room = Math.max(0, cap - node.load);
@@ -168,6 +235,20 @@
       };
 
       switch (node.kind) {
+        case 'igw': {
+          if (!outs.length) { this.fail(node, kind, accepted, 'no-route'); return; }
+          const share = accepted / outs.length; // a route, not a load balancer: no health checks
+          for (const t of outs) {
+            this.flow(node.id, t.id, share, kind);
+            if (subnetOf(t.col) !== 'public') this.fail(t, kind, share, 'private-subnet');
+            else this.route(t, kind, share, lat, depth + 1, true);
+          }
+          return;
+        }
+        case 's3': {
+          if (node.cfg.public) this.ok(node, kind, accepted, lat); else this.fail(node, kind, accepted, 'bucket-private');
+          return;
+        }
         case 'cdn': {
           if (kind === 'static') { this.ok(node, kind, accepted, lat); return; }
           const targets = outs.filter(o => !o.dead);
@@ -183,6 +264,16 @@
         }
         case 'web': case 'webxl': case 'asg': {
           if (kind === 'static') { this.ok(node, kind, accepted, lat); return; }
+          if (localDb) { this.ok(node, kind, accepted, lat + LOCAL_DB_LAT); return; }
+          if (kind === 'write' && this.sc.net) {
+            // uploads go to S3 with the server's own credentials; checkout calls a payment API on the internet
+            if (this.sc.uploads && outs.some(o => o.kind === 's3') && !node.cfg.s3auth) { this.fail(node, kind, accepted, 'no-iam'); return; }
+            if (this.sc.egress) {
+              const via = this.egress(node);
+              if (!via) { this.fail(node, kind, accepted, 'no-egress'); return; }
+              if (via !== true) this.flow(node.id, via.id, accepted, kind);
+            }
+          }
           if (kind === 'read') {
             const caches = outs.filter(o => o.kind === 'cache' && !o.dead);
             if (caches.length) { spread(caches, kind, accepted, lat); return; }
@@ -311,10 +402,14 @@
         const a = amt * (this.sc.mix[kind] || 0);
         if (a <= 0) continue;
         if (kind === 'async') this.stats.jobsTotal += a;
-        if (!this.entries.length) { this.fail(null, kind, a, 'no-entry'); continue; }
-        const share = a / this.entries.length;
-        for (const e of this.entries) {
+        // asset URLs point at the bucket: S3 takes static traffic and nothing else
+        const s3e = this.entries.filter(e => e.kind === 's3');
+        const ents = kind === 'static' && s3e.length ? s3e : this.entries.filter(e => e.kind !== 's3');
+        if (!ents.length) { this.fail(null, kind, a, 'no-entry'); continue; }
+        const share = a / ents.length;
+        for (const e of ents) {
           this.flow('users', e.id, share, kind);
+          if (this.sc.net && !['igw', 's3', 'cdn'].includes(e.kind)) { this.fail(e, kind, share, 'no-igw'); continue; }
           const lat0 = e.kind === 'cdn' ? 0 : (this.sc.originLatency || 0);
           this.route(e, kind, share, lat0, 0, true);
         }
@@ -362,6 +457,7 @@
       ];
       if (isFinite(this.sc.budget)) checks.push({ key: 'cost', label: 'Monthly cost', value: cost, target: this.sc.budget, cmp: '<=', fmt: v => '$' + Math.round(v), pass: cost <= this.sc.budget });
       if ((this.sc.mix.async || 0) > 0) checks.push({ key: 'jobs', label: 'Jobs completed', value: jobs, target: tg.jobs || 95, cmp: '>=', fmt: v => v.toFixed(1) + '%', pass: jobs + 1e-9 >= (tg.jobs || 95) });
+      if (this.sc.net) { const n = this.audit().length; checks.push({ key: 'audit', label: 'Audit keamanan', value: n, target: 0, cmp: '<=', fmt: v => v + ' temuan', pass: n === 0 }); }
       const pass = checks.every(c => c.pass);
       let stars = 0;
       if (pass) stars = (isFinite(this.sc.budget) && cost <= this.sc.budget * 0.8) ? 3 : 2;
@@ -381,6 +477,14 @@
     const kinds = k => nodes.filter(n => (Array.isArray(k) ? k : [k]).includes(n.kind));
     const webs = kinds(WEB_KINDS), lbs = kinds('lb'), dbs = kinds('db'), reps = kinds('replica'), caches = kinds('cache'), cdns = kinds('cdn'), queues = kinds('queue'), workers = kinds('worker');
 
+    for (const a of sim.audit()) out.push({ level: 'bad', text: 'Audit: ' + a });
+    if (f['no-igw']) out.push({ level: 'bad', text: `${pct(f['no-igw'])} request tidak pernah masuk ke VPC. VPC itu jaringan tertutup: pasang Internet Gateway, lalu link Users -> IGW -> server.` });
+    if (f['private-subnet']) out.push({ level: 'bad', text: `${pct(f['private-subnet'])} request ditujukan ke node di private subnet. Private subnet tidak punya rute dari internet. Yang menerima trafik user (web server, load balancer) harus di public subnet.` });
+    if (f['sg-blocked']) out.push({ level: 'bad', text: `${pct(f['sg-blocked'])} request ditolak Security Group. SG baru menolak semua trafik masuk. Web server: buka 80 dan 443. Database: buka 3306 dengan sumber sg-web. Klik node untuk mengaturnya.` });
+    if (f['bucket-private']) out.push({ level: 'bad', text: `${pct(f['bucket-private'])} request aset dijawab 403 oleh S3. Bucket baru selalu private. Klik bucket dan ubah ke PUBLIC READ (hanya untuk bucket aset).` });
+    if (f['no-iam']) out.push({ level: 'bad', text: `${pct(f['no-iam'])} upload gagal dengan AccessDenied. Server belum punya izin ke S3. Klik web server dan pasang IAM Role.` });
+    if (f['no-egress']) out.push({ level: 'bad', text: `${pct(f['no-egress'])} request gagal karena server di private subnet tidak bisa memanggil internet. Pasang NAT Gateway di PUBLIC subnet (dan pastikan ada Internet Gateway).` });
+    if (scenario.localDb && nodes.some(n => WEB_KINDS.includes(n.kind) && n.reasons.overload)) out.push({ level: 'bad', text: `Aplikasi dan MySQL berebut CPU di satu mesin: setiap query dihitung ${LOCAL_DB_WEIGHT}x. Ganti ke Big Web Server (vertical scaling).` });
     if (f['no-entry']) out.push({ level: 'bad', text: `Nothing was connected to Users. Drag from the Users icon to your first component.` });
     if (f['dead-entry']) out.push({ level: 'bad', text: `${pct(f['dead-entry'])} of requests went straight to a dead server. DNS does not health-check. Put a Load Balancer in front so traffic only reaches live backends.` });
     if (f['no-backend']) out.push({ level: 'bad', text: `The Load Balancer had no live backend for ${pct(f['no-backend'])} of requests. One backend is a single point of failure. Add a second server, in a different AZ.` });
@@ -402,7 +506,7 @@
     if (deadWeb.length && !f['dead-entry']) out.push({ level: 'bad', text: `Traffic was still routed to dead web servers (${deadWeb.map(n => n.id).join(', ')}). A CDN forwards blindly: put a Load Balancer between CDN and servers.` });
 
     // structural warnings
-    if (webs.length === 1 && !(webs[0].kind === 'asg')) out.push({ level: 'warn', text: `One web server is a single point of failure. Two small servers behind a Load Balancer beat one big one.` });
+    if (webs.length === 1 && !(webs[0].kind === 'asg') && scenario.allowed.includes('lb')) out.push({ level: 'warn', text: `One web server is a single point of failure. Two small servers behind a Load Balancer beat one big one.` });
     if (webs.length > 1 && !lbs.length && !cdns.length) out.push({ level: 'warn', text: `Multiple servers with no Load Balancer: users pick servers by DNS round-robin, dead ones included.` });
     const zonal = nodes.filter(n => !n.def.zoneless);
     const zonesUsed = new Set(zonal.map(n => n.zone));
@@ -413,8 +517,8 @@
     if (queues.length && !workers.length) out.push({ level: 'bad', text: `Queue with no Worker: jobs are accepted and never processed.` });
     if (workers.length && !queues.length) out.push({ level: 'warn', text: `Workers without a Queue have nothing to pull from.` });
     if ((scenario.mix.async || 0) > 0 && !queues.length) out.push({ level: 'warn', text: `Async jobs are processed inline on the web tier: 3x capacity and +${LOCAL_ASYNC_LAT}ms per job. Hand them to a Queue + Workers.` });
-    if ((scenario.mix.read || 0) >= 0.5 && !caches.length && dbs.length) out.push({ level: 'warn', text: `Read-heavy workload with no Cache. A cache serves ~80% of reads and is cheaper than a replica.` });
-    if ((scenario.mix.static || 0) >= 0.3 && !cdns.length) out.push({ level: 'warn', text: `${Math.round(scenario.mix.static * 100)}% of traffic is static. A CDN serves it at the edge: less load, less latency.` });
+    if ((scenario.mix.read || 0) >= 0.5 && !caches.length && dbs.length && scenario.allowed.includes('cache')) out.push({ level: 'warn', text: `Read-heavy workload with no Cache. A cache serves ~80% of reads and is cheaper than a replica.` });
+    if ((scenario.mix.static || 0) >= 0.3 && !cdns.length && scenario.allowed.includes('cdn')) out.push({ level: 'warn', text: `${Math.round(scenario.mix.static * 100)}% of traffic is static. A CDN serves it at the edge: less load, less latency.` });
 
     const costCheck = r.checks.find(c => c.key === 'cost');
     if (costCheck && !costCheck.pass) {

@@ -12,7 +12,95 @@
 
   const ALL = ['cdn', 'lb', 'web', 'webxl', 'asg', 'cache', 'db', 'replica', 'queue', 'worker'];
 
+
+  // ---------- AWS networking basics: one continuing story, each level starts from the previous design ----------
+  // In these levels (net: true) the grid is a VPC: see subnetOf in components.js.
+  // Web Server = EC2, DB Primary = RDS, DB Replica = RDS Multi-AZ standby, Load Balancer = ALB.
+  const SG_WEB = { http: 1, https: 1, ssh: 'myip' };                // 80 + 443 from anywhere, 22 from the admin IP only
+  const SG_APP = { http: 1, https: 1, ssh: 'myip', s3auth: 'role' };
+  const SG_ASG = { http: 1, https: 1, s3auth: 'role' };              // nobody SSHes into auto scaled instances
+  const SCAN = { t: 6, type: 'scan', duration: 999 };
+  const SOL = {
+    vpc: design([['igw', 1, 2], ['web', 4, 2, { http: 1, https: 1 }]], ['users>igw-1', 'igw-1>web-1']),
+    monolith: design([['igw', 1, 2], ['webxl', 4, 2, SG_WEB]], ['users>igw-1', 'igw-1>webxl-1']),
+    rds: design([['igw', 1, 2], ['web', 4, 2, SG_WEB], ['db', 9, 2, { dbsrc: 'web' }]], ['users>igw-1', 'igw-1>web-1', 'web-1>db-1']),
+    s3: design([['igw', 1, 2], ['web', 4, 2, SG_APP], ['db', 9, 2, { dbsrc: 'web' }], ['s3', 0, 4, { public: 1 }]],
+      ['users>igw-1', 'igw-1>web-1', 'web-1>db-1', 'users>s3-1', 'web-1>s3-1']),
+    multiaz: design([['igw', 1, 2], ['lb', 2, 2], ['web', 4, 0, SG_APP], ['web', 4, 2, SG_APP], ['db', 9, 0, { dbsrc: 'web' }], ['replica', 9, 2], ['s3', 0, 4, { public: 1 }]],
+      ['users>igw-1', 'igw-1>lb-1', 'users>s3-1', 'db-1>replica-1',
+        ...[1, 2].flatMap(i => [`lb-1>web-${i}`, `web-${i}>db-1`, `web-${i}>replica-1`, `web-${i}>s3-1`])]),
+    promo: design([['igw', 1, 2], ['lb', 2, 2], ['nat', 4, 0], ['nat', 4, 2], ['asg', 8, 0, { min: 1, ...SG_ASG }], ['asg', 8, 2, { min: 1, ...SG_ASG }],
+      ['db', 10, 0, { dbsrc: 'web' }], ['replica', 10, 2], ['s3', 0, 4, { public: 1 }]],
+      ['users>igw-1', 'igw-1>lb-1', 'users>s3-1', 'db-1>replica-1',
+        ...[1, 2].flatMap(i => [`lb-1>asg-${i}`, `asg-${i}>db-1`, `asg-${i}>replica-1`, `asg-${i}>s3-1`])])
+  };
+  const NET_SCENARIOS = [
+    {
+      id: 'vpc', net: true, title: 'Lahan Kosong', tag: 'VPC, subnet, Internet Gateway',
+      story: 'Hari pertama PKL di Batik Laras, UMKM batik yang mau mulai jualan online. Mbak Rina, cloud engineer di sana, memberimu akun AWS dengan satu VPC kosong (10.0.0.0/16). Tugasmu: tayangkan halaman "Segera Hadir". Kamu sudah menyalakan satu server, tapi browser hanya loading terus sampai timeout.',
+      learn: ['VPC = jaringan privat milikmu di AWS, tertutup dari internet sampai kamu membukanya', 'Public subnet punya rute ke Internet Gateway, private subnet tidak', 'Security Group = firewall per server. Bawaannya menolak semua trafik masuk', 'Di peta: Web Server = EC2'],
+      rate: 40, mix: { static: 1 }, duration: 20, budget: 50,
+      targets: { availability: 99, latency: 60 }, events: [],
+      allowed: ['igw', 'web'],
+      lesson: 'Tiga hal harus benar supaya server bisa dibuka dari internet: VPC punya Internet Gateway, server berada di public subnet (subnet yang route table-nya mengarah ke IGW), dan Security Group mengizinkan port 80 dan 443. Kalau salah satu hilang, gejalanya sama: timeout. Urutan itu juga urutan yang dipakai saat troubleshooting.',
+      solution: SOL.vpc
+    },
+    {
+      id: 'monolith', net: true, carry: 'vpc', localDb: true, needSsh: true, title: 'Satu Server untuk Semua', tag: 'Monolith di EC2 + SSH yang aman',
+      story: 'Toko online Batik Laras siap rilis. Supaya hemat, aplikasi dan MySQL dipasang di satu EC2 yang sama. Mas Dimas, developernya, perlu SSH ke server untuk deploy. Anak PKL sebelumnya membuka port 22 ke 0.0.0.0/0 "biar gampang", dan dalam 10 menit log server penuh percobaan login dari bot.',
+      learn: ['Monolith: aplikasi + database dalam satu mesin', 'Vertical scaling: ganti ke instance yang lebih besar', 'Port 22 hanya untuk My IP, tidak pernah untuk 0.0.0.0/0', 'Web server: 80 dan 443 terbuka untuk semua orang'],
+      rate: 80, mix: { static: 0.3, read: 0.5, write: 0.2 }, duration: 30, budget: 180,
+      targets: { availability: 99, latency: 60 }, events: [SCAN],
+      allowed: ['igw', 'web', 'webxl'],
+      lesson: 'Monolith itu awal yang wajar: murah dan sederhana. Batasnya juga jelas: aplikasi dan database berebut CPU dan RAM yang sama, dan kalau mesinnya mati, datanya ikut hilang. Untuk SSH, aturannya satu: sumbernya IP kamu sendiri (/32). Bot memindai seluruh internet tanpa henti, server baru ditemukan dalam hitungan menit.',
+      start: SOL.vpc, solution: SOL.monolith
+    },
+    {
+      id: 'rds', net: true, carry: 'monolith', needSsh: true, title: 'Database Pindah Rumah', tag: 'RDS di private subnet',
+      story: 'Jam 2 pagi MySQL kehabisan RAM dan dimatikan oleh sistem operasi. Toko mati sampai subuh dan tidak ada backup. Mbak Rina memutuskan: database pindah ke RDS, layanan database terkelola dengan backup otomatis. Data pelanggan ada di sana, jadi tidak boleh ada satu paket pun dari internet yang bisa menyentuhnya.',
+      learn: ['Pisahkan tier: web di public subnet, database di private subnet', 'SG database: port 3306 hanya dari Security Group web server (sg-web)', 'Sumber berupa SG lebih aman daripada IP: tetap benar saat server diganti', 'Di peta: DB Primary = RDS'],
+      rate: 90, mix: { static: 0.3, read: 0.5, write: 0.2 }, duration: 30, budget: 260,
+      targets: { availability: 99, latency: 60 }, events: [SCAN],
+      allowed: ['igw', 'web', 'webxl', 'db'],
+      lesson: 'Ini pola two-tier yang dipakai di industri. Database di private subnet tidak punya rute dari internet, dan Security Group-nya hanya menerima koneksi dari sg-web. Dua lapis: kalau satu salah konfigurasi, yang lain masih menahan. Setelah database pindah, web server kembali ringan dan bisa diturunkan ke ukuran kecil.',
+      start: SOL.monolith, solution: SOL.rds
+    },
+    {
+      id: 's3', net: true, carry: 'rds', needSsh: true, uploads: true, title: 'Foto Produk', tag: 'S3 + IAM Role',
+      story: 'Batik Laras sekarang punya ratusan produk dan tiap produk punya banyak foto. Disk EC2 hampir penuh dan 60% trafik hanya mengambil gambar. Pindahkan aset ke S3: pengunjung mengambil foto langsung dari bucket, dan aplikasi mengunggah foto baru ke sana. Mas Dimas menawarkan access key miliknya untuk ditaruh di file .env server.',
+      learn: ['S3 untuk aset statis: murah, tidak membebani web server', 'Bucket baru selalu private. Public-read hanya untuk bucket aset', 'IAM Role memberi server izin sementara, tanpa menyimpan access key', 'Link Users -> S3 (aset publik) dan Web -> S3 (upload)'],
+      rate: 150, mix: { static: 0.6, read: 0.3, write: 0.1 }, duration: 30, budget: 260,
+      targets: { availability: 99, latency: 60 }, events: [SCAN],
+      allowed: ['igw', 'web', 'webxl', 'db', 's3'],
+      lesson: 'Sekarang arsitekturnya three-tier: web (EC2), data (RDS), aset (S3). Access key di server adalah sumber kebocoran paling umum: sekali ter-commit ke GitHub, bot menemukannya dalam hitungan menit. IAM Role menempel pada EC2 dan kredensialnya berganti otomatis. Bucket publik hanya boleh berisi file yang memang untuk umum. Langkah berikutnya di dunia nyata: CloudFront di depan S3.',
+      start: SOL.rds, solution: SOL.s3
+    },
+    {
+      id: 'multiaz', net: true, carry: 's3', needSsh: true, uploads: true, title: 'Satu Gedung Padam', tag: 'Multi-AZ + Load Balancer',
+      story: 'Batik Laras diliput TV nasional. Tepat saat tayang, satu Availability Zone (satu kompleks data center) mengalami gangguan listrik. Semua yang kamu bangun ada di AZ itu. Tiga pita di peta, dari atas ke bawah, adalah AZ-a, AZ-b, AZ-c, dan AZ yang padam adalah yang paling banyak isinya.',
+      learn: ['Satu subnet hidup di satu AZ. Multi-AZ berarti subnet di AZ berbeda', 'Load Balancer (ALB) membagi trafik dan melewati server yang mati', 'RDS Multi-AZ: standby di AZ lain, failover otomatis', 'Di peta: DB Replica = standby. Link DB Primary -> Replica dan Web -> Replica'],
+      rate: 150, mix: { static: 0.6, read: 0.3, write: 0.1 }, duration: 60, budget: 400,
+      targets: { availability: 98, latency: 60 },
+      events: [SCAN, { t: 20, type: 'az', zone: 'busiest', duration: 20 }],
+      allowed: ['igw', 'lb', 'web', 'webxl', 'db', 'replica', 's3'],
+      lesson: 'AZ adalah satuan kegagalan. Dua server di AZ yang sama tetap mati bersama. Sebar web server ke dua AZ di belakang Load Balancer, dan simpan standby database di AZ yang berbeda dari primary. Failover butuh beberapa detik, karena itu targetnya 98% dan bukan 100%. S3 dan Load Balancer adalah layanan terkelola yang sudah multi-AZ.',
+      start: SOL.s3, solution: SOL.multiaz
+    },
+    {
+      id: 'promo', net: true, carry: 'multiaz', uploads: true, privateApp: true, egress: true, elastic: true, title: 'Promo 12.12', tag: 'Auto Scaling + NAT Gateway',
+      story: 'Promo 12.12 mulai tengah malam dan trafik akan naik 6x selama beberapa menit. Sebelum promo, auditor keamanan meminta: server aplikasi tidak boleh punya IP publik, cukup Load Balancer yang menghadap internet. Tapi setiap checkout harus memanggil API payment gateway di internet, dan itu tidak boleh putus.',
+      learn: ['Auto Scaling menambah server saat ramai dan menguranginya saat sepi', 'Server aplikasi di private subnet, hanya Load Balancer di public subnet', 'NAT Gateway: jalan keluar ke internet untuk private subnet, tanpa jalan masuk', 'NAT hidup di satu AZ: pasang satu per AZ'],
+      rate: 150, mix: { static: 0.6, read: 0.3, write: 0.1 }, duration: 90, budget: 700,
+      targets: { availability: 96, latency: 70 },
+      events: [SCAN, { t: 25, type: 'spike', mult: 6, duration: 15 }, { t: 60, type: 'az', zone: 'busiest', duration: 15 }],
+      allowed: ['igw', 'nat', 'lb', 'web', 'webxl', 'asg', 'db', 'replica', 's3'],
+      lesson: 'Inilah arsitektur three-tier yang dipakai di produksi: Load Balancer dan NAT Gateway di public subnet, server aplikasi dan database di private subnet, aset di S3. Auto Scaling selalu terlambat beberapa detik, jadi atur MIN sesuai beban normal. Tanpa SSH, akses ke server memakai SSM Session Manager. NAT Gateway dibayar per jam dan per GB: di tagihan AWS sungguhan, ini sering jadi biaya yang tidak disangka.',
+      start: SOL.multiaz, solution: SOL.promo
+    }
+  ];
+
   const SCENARIOS = [
+    ...NET_SCENARIOS,
     {
       id: 'hello', title: 'Hello, Cloud', tag: 'Request path basics',
       story: 'Your first day. A tiny blog needs to go live before lunch. Nothing fancy: make requests reach a server, and make the server reach a database.',
