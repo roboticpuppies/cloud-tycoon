@@ -265,6 +265,7 @@
 
   function renderStats() {
     const sim = S.sim;
+    $('stCost').parentNode.classList.toggle('over', (sim ? sim.cost() : designCost(S.design)) > S.sc.budget);
     if (!sim) {
       $('stRate').textContent = S.sc.rate + ' req/s'; $('stAvail').textContent = '-'; $('stLat').textContent = '-';
       $('stCost').textContent = '$' + designCost(S.design); $('stBacklog').textContent = '-';

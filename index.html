@@ -57,11 +57,11 @@
     </div>
     <div id="live" class="panel">
       <div class="stats">
-        <div><label>TRAFFIC</label><b id="stRate">-</b></div>
-        <div><label>AVAILABILITY</label><b id="stAvail">-</b></div>
-        <div><label>LATENCY</label><b id="stLat">-</b></div>
-        <div><label>COST / MO</label><b id="stCost">-</b></div>
-        <div><label>BACKLOG</label><b id="stBacklog">-</b></div>
+        <div><label>TRAFFIC</label><b id="stRate">-</b><small>incoming load</small></div>
+        <div><label>AVAILABILITY</label><b id="stAvail">-</b><small>higher is better</small></div>
+        <div><label>LATENCY</label><b id="stLat">-</b><small>lower is better</small></div>
+        <div><label>COST / MO</label><b id="stCost">-</b><small>lower is better</small></div>
+        <div><label>BACKLOG</label><b id="stBacklog">-</b><small>lower is better</small></div>
       </div>
       <canvas id="chart" width="600" height="56"></canvas>
       <div id="log"></div>
