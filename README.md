@@ -40,12 +40,12 @@ Meeting every target gives 2 stars. Doing it at 80% of budget or less gives 3.
 
 | # | Scenario | Teaches |
 |---|---|---|
-| 1 | Lahan Kosong | VPC, public/private subnet, Internet Gateway, Security Group |
-| 2 | Satu Server untuk Semua | Monolith on EC2, vertical scaling, SSH from My IP only |
-| 3 | Database Pindah Rumah | RDS in a private subnet, SG that only accepts sg-web |
-| 4 | Foto Produk | S3 for assets, public-read bucket, IAM Role |
-| 5 | Satu Gedung Padam | Multi-AZ, load balancer, RDS standby |
-| 6 | Promo 12.12 | Auto Scaling in private subnets, NAT Gateway per AZ |
+| 1 | Empty Lot | VPC, public/private subnet, Internet Gateway, Security Group |
+| 2 | One Server for Everything | Monolith on EC2, vertical scaling, SSH from My IP only |
+| 3 | The Database Moves Out | RDS in a private subnet, SG that only accepts sg-web |
+| 4 | Product Photos | S3 for assets, public-read bucket, IAM Role |
+| 5 | One Building Goes Dark | Multi-AZ, load balancer, RDS standby |
+| 6 | The 12.12 Sale | Auto Scaling in private subnets, NAT Gateway per AZ |
 | 7 | Hello, Cloud | Request path basics |
 | 8 | The 3 AM Crash | Redundancy, load balancer health checks, N+1 |
 | 9 | Zone Down | Multi-AZ design, failure domains |
@@ -59,7 +59,7 @@ Meeting every target gives 2 stars. Doing it at 80% of budget or less gives 3.
 | 17 | Black Friday | Everything at once |
 | 18 | Sandbox | Free play with chaos buttons |
 
-Scenarios 1 to 6 are an AWS networking course in Indonesian for vocational students: one continuing story where each level starts from the design of the previous one, ending in a three-tier app (VPC, EC2, RDS, S3). They add a best-practice audit to the score.
+Scenarios 1 to 6 are an AWS networking course for vocational students: one continuing story where each level starts from the design of the previous one, ending in a three-tier app (VPC, EC2, RDS, S3). They add a best-practice audit to the score.
 
 Each run is scored on availability, average latency, monthly cost and async job completion. Passing gives 2 stars. Spending 80% of budget or less gives 3. A failed run produces a post-mortem that names what broke and why.
 

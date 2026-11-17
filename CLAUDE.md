@@ -44,7 +44,7 @@ Run `node test/check.js` after any change to `js/components.js`, `js/sim.js` or 
 
 ## Network levels
 
-The first six scenarios (`net: true`, written in Indonesian for vocational students) teach AWS networking as one story. Rules that only apply when `scenario.net` is set:
+The first six scenarios (`net: true`, aimed at vocational students new to AWS, so keep their English short and plain) teach AWS networking as one story. Rules that only apply when `scenario.net` is set:
 
 - The grid is one VPC. `subnetOf(col)`: columns 0-1 are outside the VPC (`igw`, `s3`), 2-6 public subnets, 7-11 private subnets. `canPlace` enforces this in the UI and in `test/check.js`.
 - Users must enter through `igw` (or `s3` for static). The IGW only delivers to nodes in a public subnet.

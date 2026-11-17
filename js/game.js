@@ -87,7 +87,7 @@
   // Network levels: IGW and S3 sit outside the VPC, everything else inside a subnet.
   function placeOk(kind, col) {
     if (!S.sc.net || canPlace(kind, col)) return true;
-    toast(subnetOf(col) === 'edge' ? `${COMPONENTS[kind].name} harus berada di dalam VPC, di public atau private subnet.` : `${COMPONENTS[kind].name} berada di luar VPC: taruh di dua kolom paling kiri.`);
+    toast(subnetOf(col) === 'edge' ? `${COMPONENTS[kind].name} must be inside the VPC, in a public or private subnet.` : `${COMPONENTS[kind].name} sits outside the VPC: place it in the two leftmost columns.`);
     sfx.err(); return false;
   }
   function removeNode(id) {
@@ -177,7 +177,7 @@
   }
 
   // ---------- panels ----------
-  const EV_TEXT = e => e.type === 'scan' ? 'bot memindai port 22 dan 3306 yang terbuka ke internet'
+  const EV_TEXT = e => e.type === 'scan' ? 'bots scan for ports 22 and 3306 open to the internet'
     : e.type === 'kill' ? `${[].concat(e.target).includes('db') ? 'database' : [].concat(e.target).includes('cache') ? 'cache' : [].concat(e.target).includes('worker') ? 'worker' : 'server'} crash (${e.duration}s)`
     : e.type === 'az' ? `AZ outage, ${e.zone === 'busiest' ? 'your busiest zone' : 'AZ-' + 'abc'[e.zone]} (${e.duration}s)` : `traffic spike x${e.mult} (${e.duration}s)`;
 
@@ -200,21 +200,21 @@
       <div class="req"><span>Availability</span><b>&ge; ${sc.targets.availability}%</b></div>
       <div class="req"><span>Avg latency</span><b>&le; ${sc.targets.latency}ms</b></div>
       ${m.async ? `<div class="req"><span>Jobs completed</span><b>&ge; ${sc.targets.jobs || 95}%</b></div>` : ''}
-      ${sc.net ? '<div class="req"><span>Audit keamanan</span><b>0 temuan</b></div>' : ''}
+      ${sc.net ? '<div class="req"><span>Security audit</span><b>0 findings</b></div>' : ''}
       ${isFinite(sc.budget) ? `<div class="req"><span>Budget</span><b class="${over ? 'bad' : ''}">$${cost} / $${sc.budget}</b></div>` : `<div class="req"><span>Cost</span><b>$${cost}</b></div>`}
       ${sc.events.length ? `<h3>THREAT FORECAST</h3>${sc.events.map(e => `<div class="req threat"><span>t=${e.t}s</span><span>${esc(EV_TEXT(e))}</span></div>`).join('')}` : (sc.sandbox ? '<h3>THREATS</h3><div class="info">You are the threat. Chaos buttons appear when you hit Run.</div>' : '<h3>THREAT FORECAST</h3><div class="info">Clear skies.</div>')}`;
   }
 
   // Per-node settings in network levels. Click cycles through the values; the first one is the AWS default.
-  const OPEN = [[0, 'TUTUP'], [1, '0.0.0.0/0']];
+  const OPEN = [[0, 'CLOSED'], [1, '0.0.0.0/0']];
   function netFields(n) {
     if (WEB_KINDS.includes(n.kind)) return [
-      { key: 'http', label: 'SG masuk 80 (HTTP)', vals: OPEN },
-      { key: 'https', label: 'SG masuk 443 (HTTPS)', vals: OPEN },
-      { key: 'ssh', label: 'SG masuk 22 (SSH)', vals: [[0, 'TUTUP'], ['myip', 'MY IP /32'], ['any', '0.0.0.0/0']] },
-      ...(S.sc.allowed.includes('s3') ? [{ key: 's3auth', label: 'Akses ke S3', vals: [[0, 'TIDAK ADA'], ['key', 'ACCESS KEY DI .ENV'], ['role', 'IAM ROLE']] }] : [])];
-    if (n.kind === 'db') return [{ key: 'dbsrc', label: 'SG masuk 3306 (MySQL)', vals: [[0, 'TUTUP'], ['web', 'DARI SG-WEB'], ['any', '0.0.0.0/0']] }];
-    if (n.kind === 's3') return [{ key: 'public', label: 'Akses bucket', vals: [[0, 'PRIVATE'], [1, 'PUBLIC READ']] }];
+      { key: 'http', label: 'SG inbound 80 (HTTP)', vals: OPEN },
+      { key: 'https', label: 'SG inbound 443 (HTTPS)', vals: OPEN },
+      { key: 'ssh', label: 'SG inbound 22 (SSH)', vals: [[0, 'CLOSED'], ['myip', 'MY IP /32'], ['any', '0.0.0.0/0']] },
+      ...(S.sc.allowed.includes('s3') ? [{ key: 's3auth', label: 'S3 access', vals: [[0, 'NONE'], ['key', 'ACCESS KEY IN .ENV'], ['role', 'IAM ROLE']] }] : [])];
+    if (n.kind === 'db') return [{ key: 'dbsrc', label: 'SG inbound 3306 (MySQL)', vals: [[0, 'CLOSED'], ['web', 'FROM SG-WEB'], ['any', '0.0.0.0/0']] }];
+    if (n.kind === 's3') return [{ key: 'public', label: 'Bucket access', vals: [[0, 'PRIVATE'], [1, 'PUBLIC READ']] }];
     return [];
   }
 
@@ -231,12 +231,12 @@
       <div>Capacity: <b>${cap}</b> &middot; Cost: <b>$${d.cost}${n.kind === 'asg' ? ' + $' + d.perInstance * (n.cfg.min || 1) : ''}</b> &middot; +${d.lat}ms</div>`;
     if (S.sc.net) {
       const sub = subnetOf(n.col), z = zoneOf(n.row);
-      h += `<div>Lokasi: <b>${sub === 'edge' ? 'luar VPC' : `${sub} subnet ${'abc'[z]} (10.0.${z + 1 + (sub === 'private' ? 10 : 0)}.0/24)`}</b></div>`;
+      h += `<div>Location: <b>${sub === 'edge' ? 'outside the VPC' : `${sub} subnet ${'abc'[z]} (10.0.${z + 1 + (sub === 'private' ? 10 : 0)}.0/24)`}</b></div>`;
       for (const f of netFields(n)) {
         const cur = f.vals.find(v => v[0] === (n.cfg[f.key] || 0)) || f.vals[0];
         h += `<div>${f.label}: <button class="mini" data-cfg="${f.key}" ${S.sim ? 'disabled' : ''}>${cur[1]}</button></div>`;
       }
-      if (n.kind === 'replica') h += `<div>Security Group: <b>sama dengan DB Primary</b></div>`;
+      if (n.kind === 'replica') h += `<div>Security Group: <b>same as DB Primary</b></div>`;
     }
     if (n.kind === 'asg') h += `<div>Min instances: <button class="mini" data-min="-1">-</button> <b>${n.cfg.min || 1}</b> <button class="mini" data-min="1">+</button></div>`;
     if (sn) {
@@ -412,7 +412,7 @@
     $('btnSolution').disabled = !(sc.solution && (S.fails[sc.id] || 0) >= 1);
     $('btnSolution').classList.toggle('hidden', !sc.solution);
     renderPalette(); renderBrief(); renderInspect(); renderStats(); renderTimeMarks(); renderHeader(); drawChart();
-    $('hint').innerHTML = sc.net ? `${sc.carry ? 'Ini arsitektur dari level sebelumnya. Lanjutkan dari sini. ' : ''}<b>Klik node</b> untuk mengatur Security Group. Internet Gateway dan S3 ditaruh di luar VPC (dua kolom kiri).` : sc.start && !saved ? 'This design is already running in prod. <b>Right-click</b> nodes to delete what you do not need.' : 'Pick a component, click the map to place it. <b>Drag node to node</b> to link. Start from the <b>Users</b> icon. Right-click deletes.';
+    $('hint').innerHTML = sc.net ? `${sc.carry ? 'This is your architecture from the previous level. Continue from here. ' : ''}<b>Click a node</b> to set its Security Group. Internet Gateway and S3 go outside the VPC (two leftmost columns).` : sc.start && !saved ? 'This design is already running in prod. <b>Right-click</b> nodes to delete what you do not need.' : 'Pick a component, click the map to place it. <b>Drag node to node</b> to link. Start from the <b>Users</b> icon. Right-click deletes.';
   }
 
   // ---------- drawing ----------
@@ -463,7 +463,7 @@
       const x0 = GX + 2 * TILE, x1 = GX + 7 * TILE, gh = GRID.rows * TILE;
       ctx.fillStyle = INK; ctx.fillRect(x1 - 1, GY, 2, gh);                       // public | private
       ctx.strokeStyle = '#e8590c'; ctx.lineWidth = 2; ctx.strokeRect(x0, GY + 1, GX + gw - x0 - 1, gh - 2); // the VPC
-      text('LUAR VPC', GX + TILE, 2, '#ffffff', 'center');
+      text('OUTSIDE', GX + TILE, 2, '#ffffff', 'center');
       text('VPC: PUBLIC SUBNET', (x0 + x1) / 2, 2, '#ffe066', 'center');
       text('VPC: PRIVATE SUBNET', (x1 + GX + gw) / 2, 2, '#bfe3ff', 'center');
     }
